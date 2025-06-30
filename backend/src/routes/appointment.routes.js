@@ -18,9 +18,8 @@ import {
 
 const router = express.Router();
 
-// Public routes
+// Public routes (must be first)
 router.get('/completed', getCompletedAppointments);
-router.get('/:id', getAppointmentById);
 
 // Protected routes
 router.use(protect);
@@ -40,5 +39,8 @@ router.put('/:id/photos', authorize('barber'), updateAppointmentPhotos);
 router.get('/', authorize('admin'), getAppointments);
 router.put('/:id', authorize('admin'), updateAppointment);
 router.delete('/:id', authorize('admin'), deleteAppointment);
+
+// Public route for getting appointment by ID (must be last)
+router.get('/:id', getAppointmentById);
 
 export default router; 

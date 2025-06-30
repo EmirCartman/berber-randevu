@@ -143,8 +143,14 @@ export const getAppointmentById = async (req, res) => {
   try {
     console.log('Fetching appointment:', {
       appointmentId: req.params.id,
-      user: req.user ? { role: req.user.role, userId: req.user.userId } : 'not logged in'
+      user: req.user ? { role: req.user.role, userId: req.user.userId } : 'not logged in',
+      headers: req.headers
     });
+
+    if (!req.params.id) {
+      console.error('No appointment ID provided');
+      return res.status(400).json({ message: 'Randevu ID\'si gerekli' });
+    }
 
     const appointment = await Appointment.findById(req.params.id)
       .populate('customer', 'name email phone')
@@ -160,7 +166,10 @@ export const getAppointmentById = async (req, res) => {
       id: appointment._id,
       status: appointment.status,
       customer: appointment.customer?._id,
-      barberId: appointment.barberId?._id
+      barberId: appointment.barberId?._id,
+      services: appointment.services?.length,
+      customerId: appointment.customer?._id?.toString(),
+      barberIdStr: appointment.barberId?._id?.toString()
     });
 
     // Tamamlanmış randevular herkese açık
@@ -182,15 +191,32 @@ export const getAppointmentById = async (req, res) => {
     }
 
     // Müşteri ve berber kendi randevularını görebilir
-    const isCustomer = req.user.userId === appointment.customer.toString();
-    const isBarber = req.user.userId === appointment.barberId._id.toString();
-    
-    console.log('Access check:', {
-      userId: req.user.userId,
+    const customerId = appointment.customer?._id?.toString();
+    const barberId = appointment.barberId?._id?.toString();
+    const userId = req.user.userId?.toString();
+
+    console.log('Access check details:', {
+      userId,
+      customerId,
+      barberId,
+      userRole: req.user.role
+    });
+
+    if (!customerId || !barberId || !userId) {
+      console.error('Missing ID in access check:', {
+        customerId,
+        barberId,
+        userId
+      });
+      return res.status(500).json({ message: 'Randevu erişim bilgileri eksik' });
+    }
+
+    const isCustomer = userId === customerId;
+    const isBarber = userId === barberId;
+
+    console.log('Access check result:', {
       isCustomer,
-      isBarber,
-      customerId: appointment.customer.toString(),
-      barberId: appointment.barberId._id.toString()
+      isBarber
     });
 
     if (isCustomer || isBarber) {
@@ -205,9 +231,14 @@ export const getAppointmentById = async (req, res) => {
       error: error.message,
       stack: error.stack,
       appointmentId: req.params.id,
-      user: req.user ? { role: req.user.role, userId: req.user.userId } : 'not logged in'
+      user: req.user ? { role: req.user.role, userId: req.user.userId } : 'not logged in',
+      headers: req.headers
     });
-    res.status(500).json({ message: 'Randevu bilgileri yüklenirken bir hata oluştu', error: error.message });
+    res.status(500).json({ 
+      message: 'Randevu bilgileri yüklenirken bir hata oluştu', 
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 };
 
@@ -324,7 +355,7 @@ export const updateAppointmentStatus = async (req, res) => {
   try {
     const { status, note, photos } = req.body;
     const appointment = await Appointment.findOne({
-      _id: req.params.appointmentId,
+      _id: req.params.id,
       barberId: req.user.userId
     });
 
@@ -370,7 +401,7 @@ export const updateAppointmentPhotos = async (req, res) => {
   try {
     const { beforePhotos, afterPhotos } = req.body;
     const appointment = await Appointment.findOne({
-      _id: req.params.appointmentId,
+      _id: req.params.id,
       barberId: req.user.userId,
       status: 'completed'
     });
@@ -463,7 +494,7 @@ export const addOrUpdateReview = async (req, res) => {
     });
 
     const { rating, comment } = req.body;
-    const { appointmentId } = req.params;
+    const { id } = req.params;
     const userId = req.user.userId;
 
     if (!userId) {
@@ -481,7 +512,7 @@ export const addOrUpdateReview = async (req, res) => {
 
     // Randevuyu bul ve müşteri kontrolü yap
     const appointment = await Appointment.findOne({
-      _id: appointmentId,
+      _id: id,
       customer: userId
     }).populate('customer', 'name email')
       .populate({
@@ -491,7 +522,7 @@ export const addOrUpdateReview = async (req, res) => {
 
     if (!appointment) {
       console.error('Appointment not found or unauthorized:', {
-        appointmentId,
+        id,
         userId
       });
       return res.status(404).json({ message: 'Randevu bulunamadı veya bu randevu için değerlendirme yapma yetkiniz yok' });
@@ -500,7 +531,7 @@ export const addOrUpdateReview = async (req, res) => {
     // Randevu durumu kontrolü
     if (appointment.status !== 'completed') {
       console.error('Invalid appointment status for review:', {
-        appointmentId,
+        id,
         status: appointment.status
       });
       return res.status(400).json({ message: 'Sadece tamamlanmış randevular değerlendirilebilir' });
@@ -516,12 +547,12 @@ export const addOrUpdateReview = async (req, res) => {
 
     // Değerlendirmeyi güncelle veya ekle
     await Appointment.updateOne(
-      { _id: appointmentId },
+      { _id: id },
       { $set: { review: reviewData } }
     );
 
     // Güncellenmiş randevuyu getir
-    const updatedAppointment = await Appointment.findById(appointmentId)
+    const updatedAppointment = await Appointment.findById(id)
       .populate('customer', 'name email')
       .populate({
         path: 'services.serviceId',
@@ -529,7 +560,7 @@ export const addOrUpdateReview = async (req, res) => {
       });
 
     console.log('Review added/updated successfully:', {
-      appointmentId,
+      id,
       review: reviewData
     });
 
@@ -541,7 +572,7 @@ export const addOrUpdateReview = async (req, res) => {
     console.error('Error in addOrUpdateReview:', {
       error: error.message,
       stack: error.stack,
-      appointmentId: req.params.appointmentId,
+      id: req.params.id,
       userId: req.user?.userId
     });
     res.status(500).json({ message: 'Değerlendirme eklenirken bir hata oluştu' });
